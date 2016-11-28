@@ -1,0 +1,282 @@
+<?php
+
+/**
+ *
+ * This module is where you need to write your custom importer.
+ * The info file includes a css file on every page
+ *
+ * There is a menu hook below which creates a page http://drupalinterview.local/store_locator/import
+ * There is a form defined already with a box to enter the CSV data
+ *
+ * You should write your submit handler in the store_locator_import_submit function
+ *
+ */
+
+/**
+ * Implements hook_menu
+ *
+ * Setting up our menu options
+ * @return array
+ *
+ */
+function store_locator_menu()
+{
+  $items['store_locator/import'] = array(
+    'title' => 'Import Stores',
+    'description' => 'Import Stores in to the system',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('store_locator_import'),
+    'access callback' => TRUE,
+  );
+
+  $items['store_locator/list'] = array(
+    'title' => 'List Stores',
+    'description' => 'View all stores',
+    'page callback' => 'store_locator_view_all',
+    'access callback' => TRUE,
+  );
+
+  $items['store_locator/store/%'] = array(
+    'title' => 'Store Details',
+    'description' => 'View a single store',
+    'page callback' => 'store_locator_view_store',
+    'page arguments' => array(2),
+    'access callback' => TRUE,
+  );
+
+  return $items;
+}
+
+/**
+ * This function is where your form is built
+ *
+ * @param array $form
+ * @param array $form_state
+ */
+function store_locator_import($form, &$form_state)
+{
+  $form['notes'] = array(
+    '#type' => 'markup',
+    '#markup' => '<h2>Paste your CSV data in to the text area below</h2>',
+  );
+  $form['csv_data'] = array(
+    '#title' => t("CSV Data"),
+    '#type' => 'textarea',
+    '#description' => 'Paste your CSV data in here.',
+  );
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Update'),
+  );
+
+  return $form;
+}
+
+/**
+ * This is the function that will process the data submitted in the form
+ * Process your import in here
+ *
+ * @param array $form
+ * @param array $form_state
+ */
+function store_locator_import_submit($form, &$form_state)
+{
+  // Break text into rows.
+  $rows = explode("\n", $form_state['values']['csv_data']);
+  // map each row and parse the csv.
+  $csv = array_map('str_getcsv', $rows);
+
+  $created_cont = 0;
+  $updated_cont = 0;
+  foreach ($csv as $key => $data) {
+    if ($key == 0) continue; // Skip headers row.
+    // We will assume the Store Name will be unique.
+    if ($nid = _node_exist_by_title($data[0])) {
+      _update_store($nid, $data); // Update existing Store.
+      $updated_cont++;
+    }
+    else {
+      if(empty($data[0])) continue;
+      _create_store($data); // Create new Store.
+      $created_cont++;
+    }
+  }
+  // Set successful message.
+  drupal_set_message(t('Import Successful, !total rows imported, !created created; 
+    !updated updated; !skipped skipped.', array(
+      '!total' => count($csv)-1,
+      '!created' => $created_cont,
+      '!updated' => $updated_cont,
+      '!skipped' => count($csv)-1-$updated_cont-$created_cont,
+    ))
+  );
+}
+
+/**
+ * Check if node already exist and return the nid
+ * @param string $title
+ *  Title to search
+ * @param string $type
+ *  bundle type
+ * @return bool|mixed
+ *  Node id or FALSE
+ */
+function _node_exist_by_title($title, $type = 'store') {
+  $query = new EntityFieldQuery();
+  $query->entityCondition('entity_type', 'node')
+    ->entityCondition('bundle', $type)
+    ->propertyCondition('title', $title);
+  $result = $query->execute();
+
+  if (isset($result['node'])) {
+    $nid = array_keys($result['node']);
+    $nid = array_values($nid);
+    return array_shift($nid);
+  }
+  return FALSE;
+}
+
+/**
+ * Create a Node of type Store
+ * @param ArrayObject $data
+ *  Array of CSV imported data
+ */
+function _create_store($data) {
+  $values = array(
+    'type' => 'store',
+    'uid' => 0, // Create all nodes as anonymous.
+    'status' => 1,
+    'comment' => 0,
+    'promote' => 0,
+  );
+  $entity = entity_create('node', $values);
+
+  // Create Entity wrapper.
+  $node_wrapper = entity_metadata_wrapper('node', $entity);
+  _update_store_fields($node_wrapper, $data);
+  $node_wrapper->save();
+}
+
+/**
+ * Update a node of type Store
+ * @param Integer $nid
+ *  The Store node ID
+ * @param ArrayObject $data
+ *  Array of CSV imported data
+ */
+function _update_store($nid, $data) {
+  $entity = node_load($nid);
+  // Create Entity wrapper.
+  $node_wrapper = entity_metadata_wrapper('node', $entity);
+  _update_store_fields($node_wrapper, $data);
+  $node_wrapper->save();
+}
+
+/**
+ * Set values to Store entity wrapper.
+ * @param EntityMetadataWrapper $node_wrapper
+ *  Node Metadata Wrapper for a Store Content Type
+ * @param ArrayObject $data
+ *  Array of CSV imported data
+ */
+function _update_store_fields(&$node_wrapper, $data) {
+  _get_google_coordinates($data); // Google get coordinates.
+  foreach ($data as $key => $value) {
+    switch ($key) {
+      case '0':
+        if (!empty($value)) {
+          $node_wrapper->title->set($value);
+        }
+        break;
+      case '1':
+        if (!empty($value)) {
+          $node_wrapper->field_address->set($value);
+        }
+        break;
+      case '2':
+        if (!empty($value)) {
+          $node_wrapper->field_phone_number->set($value);
+        }
+        break;
+      case '3':
+        if (!empty($value)) {
+          $node_wrapper->field_store_manager->set($value);
+        }
+        break;
+      case '4':
+        if (!empty($value)) {
+          $node_wrapper->field_store_type->set($value);
+        }
+        break;
+      case '5':
+        if (!empty($value)) {
+          $node_wrapper->field_latitude->set($value);
+        }
+        break;
+      case '6':
+        if (!empty($value)) {
+          $node_wrapper->field_longitude->set($value);
+        }
+        break;
+    }
+  }
+}
+
+/**
+ * @param ArrayObject $data
+ *  Array of CSV imported data
+ */
+function _get_google_coordinates(&$data) {
+  $google_api_key = 'AIzaSyDkn1amsOkmbqBDQl0uJlorDNfRYbnk2u8';
+  $address = urlencode($data['1']);
+//  $call = 'https://maps.googleapis.com/maps/api/geocode/json?address='.$address.'&key='.$google_api_key;
+  $call = 'https://maps.googleapis.com/maps/api/geocode/json?address='.$address;
+  $json = file_get_contents($call);
+  $response = json_decode($json);
+  if ($response->status == 'OK') {
+    $location = $response->results['0'];
+    // Set Lat
+    $data['5'] = $location->geometry->location->lat;
+    // Set Long
+    $data['6'] = $location->geometry->location->lng;
+  }
+}
+
+function store_locator_node_view($node, $view_mode, $langcode) {
+  if ($node->type === 'store') {
+    $node_wrapper = entity_metadata_wrapper('node', $node);
+    $store_type = $node_wrapper->field_store_type->value();
+    if (isset($store_type)) {
+      drupal_set_title($node_wrapper->title->value() . ' - ' . $store_type);
+    }
+  }
+}
+
+
+
+/**
+ * Functions for the Non Drupal task below
+ */
+
+
+
+/*
+ * Do your store lookup in this function and just return the HTML
+ * Access this function by visiting /store_locator/list
+ * Create links to /store_locator/store/{id} for the individual store pages
+ */
+function store_locator_view_all()
+{
+  $html = 'Your HTML Here.';
+  return $html;
+}
+
+/*
+ * The store ID is passed straight in to this function
+ */
+function store_locator_view_store($storeId)
+{
+  $html = 'The Store ID is ' . $storeId;
+  return $html;
+}
